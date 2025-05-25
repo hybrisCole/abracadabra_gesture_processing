@@ -60,13 +60,13 @@ def read_csv_from_bytes(content: bytes) -> Optional[pd.DataFrame]:
 
 def read_training_data(data_dir: str) -> Dict[str, pd.DataFrame]:
     """
-    Read training data from a directory containing CSV files.
+    Read training data from a directory containing CSV files and group them by movement type.
     
     Args:
         data_dir: Directory containing CSV files for training
         
     Returns:
-        Dictionary mapping gesture names to DataFrames
+        Dictionary mapping base movement types to concatenated DataFrames
     """
     training_data = {}
     
@@ -74,16 +74,41 @@ def read_training_data(data_dir: str) -> Dict[str, pd.DataFrame]:
         # List all CSV files in the directory
         csv_files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
         
+        # Group files by movement type
+        movement_files = {}
+        
         for csv_file in csv_files:
-            # Extract gesture name from filename (assuming format like "gesture_name.csv")
-            gesture_name = os.path.splitext(csv_file)[0]
+            # Extract base movement type from filename
+            # e.g., "tap_001.csv" -> "tap", "still_021.csv" -> "still"
+            filename_no_ext = os.path.splitext(csv_file)[0]
+            parts = filename_no_ext.split('_')
             
-            # Read the CSV file
-            file_path = os.path.join(data_dir, csv_file)
-            df = read_csv_file(file_path)
+            if len(parts) >= 2 and parts[-1].isdigit():
+                # Handle numbered samples like "tap_001", "wrist_rotation_005"
+                base_movement = '_'.join(parts[:-1])
+            else:
+                # Handle simple names like "tap"
+                base_movement = filename_no_ext
             
-            if df is not None:
-                training_data[gesture_name] = df
+            if base_movement not in movement_files:
+                movement_files[base_movement] = []
+            movement_files[base_movement].append(csv_file)
+        
+        # Read and concatenate files for each movement type
+        for movement_type, files in movement_files.items():
+            dfs = []
+            for csv_file in files:
+                file_path = os.path.join(data_dir, csv_file)
+                df = read_csv_file(file_path)
+                if df is not None:
+                    dfs.append(df)
+            
+            if dfs:
+                # Concatenate all DataFrames for this movement type
+                combined_df = pd.concat(dfs, ignore_index=True)
+                training_data[movement_type] = combined_df
+                print(f"Loaded {len(dfs)} samples for movement '{movement_type}' with {len(combined_df)} total data points")
+    
     except Exception as e:
         print(f"Error reading training data: {e}")
     

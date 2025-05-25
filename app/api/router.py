@@ -8,16 +8,63 @@ import io
 
 from app.models.rf_gesture_model import RandomForestGestureModel
 from app.utils.data_handler import read_csv_from_bytes, read_training_data, validate_imu_data
+import json
+import uuid
+from datetime import datetime
 
 router = APIRouter()
 model = RandomForestGestureModel()
 
 MODEL_PATH = "app/data/rf_gesture_model.joblib"
 TRAINING_DATA_DIR = "app/data/training"
+PENDING_TRAINING_DIR = "app/data/pending_training"  # For auto-detected samples awaiting confirmation
 
 # Load model if it exists
 if os.path.exists(MODEL_PATH):
     model.load(MODEL_PATH)
+
+def save_detected_segment_for_learning(df_segment, predicted_movement, confidence, start_time, end_time):
+    """
+    Save a detected movement segment for potential addition to training data.
+    
+    Args:
+        df_segment: DataFrame containing the detected segment
+        predicted_movement: The predicted movement type
+        confidence: Confidence score (0-1)
+        start_time: Start time of the segment
+        end_time: End time of the segment
+    """
+    os.makedirs(PENDING_TRAINING_DIR, exist_ok=True)
+    
+    # Generate unique ID for this detection
+    detection_id = str(uuid.uuid4())[:8]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Save the CSV data
+    csv_filename = f"{predicted_movement}_{confidence:.3f}_{timestamp}_{detection_id}.csv"
+    csv_path = os.path.join(PENDING_TRAINING_DIR, csv_filename)
+    df_segment.to_csv(csv_path, index=False)
+    
+    # Save metadata
+    metadata = {
+        "detection_id": detection_id,
+        "predicted_movement": predicted_movement,
+        "confidence": confidence,
+        "start_time": start_time,
+        "end_time": end_time,
+        "duration": end_time - start_time,
+        "timestamp": timestamp,
+        "csv_file": csv_filename,
+        "status": "pending"  # pending, confirmed, rejected
+    }
+    
+    metadata_filename = f"{predicted_movement}_{confidence:.3f}_{timestamp}_{detection_id}.json"
+    metadata_path = os.path.join(PENDING_TRAINING_DIR, metadata_filename)
+    
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    return detection_id
 
 @router.post("/train")
 async def train_model(background_tasks: BackgroundTasks):
@@ -30,6 +77,7 @@ async def train_model(background_tasks: BackgroundTasks):
     """
     # Ensure training data directory exists
     os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
+    os.makedirs(PENDING_TRAINING_DIR, exist_ok=True)
     
     def _train_model():
         # Read training data
@@ -144,24 +192,126 @@ async def predict_gesture(csv_data: str = Form(...)):
         # Count significant movements (using minimum window threshold)
         # Only count a movement if it spans at least 2 windows (to avoid noise)
         significant_groups = [g for g in groups if g["count"] >= 2]
+        
+        # Advanced tap detection: Look for tap segments and count individual taps
+        # by analyzing confidence drops within long tap sequences
+        tap_segments = []
         significant_movements = {}
+        
         for group in significant_groups:
-            if group["movement"] != "still":  # Don't count still phases in significant movements
+            if group["movement"] == "tap":
+                # Get the confidence values for this tap segment
+                start_idx = window_times.index(group["start_time"])
+                end_idx = window_times.index(group["end_time"])
+                segment_confidences = window_confs[start_idx:end_idx+1]
+                
+                # If this is a long tap sequence, look for confidence dips that might indicate separate taps
+                if group["duration"] > 600:  # Longer than a single tap
+                    # Find local minima in confidence (potential gaps between taps)
+                    min_confidence_threshold = 0.7  # Adjust based on your model's behavior
+                    tap_count = 1
+                    
+                    # Look for significant drops in confidence
+                    for i in range(1, len(segment_confidences)-1):
+                        if (segment_confidences[i] < min_confidence_threshold and 
+                            segment_confidences[i] < segment_confidences[i-1] and 
+                            segment_confidences[i] < segment_confidences[i+1]):
+                            tap_count += 1
+                    
+                    # Also use duration-based estimation as a sanity check
+                    duration_based_estimate = max(1, int(group["duration"] / 500))  # ~500ms per tap cycle
+                    tap_count = max(tap_count, min(duration_based_estimate, 10))  # Cap at 10 to avoid outliers
+                    
+                    significant_movements["tap"] = significant_movements.get("tap", 0) + tap_count
+                else:
+                    # Single tap
+                    significant_movements["tap"] = significant_movements.get("tap", 0) + 1
+                    
+            elif group["movement"] != "still":  # Regular counting for other movements
                 movement = group["movement"]
                 significant_movements[movement] = significant_movements.get(movement, 0) + 1
         
         # Count still phases between movements
         still_phases = len([g for g in significant_groups if g["movement"] == "still"])
         
-        # Detailed information about each detected segment
+        # Detailed information about each detected segment + Auto-learning
         detailed_segments = []
+        auto_learning_results = []
+        
         for group in significant_groups:
+            # Get average confidence for this segment
+            start_idx = window_times.index(group["start_time"])
+            end_idx = window_times.index(group["end_time"])
+            segment_confidences = window_confs[start_idx:end_idx+1]
+            avg_confidence = sum(segment_confidences) / len(segment_confidences)
+            
             detailed_segments.append({
                 "movement": group["movement"],
                 "start_time": group["start_time"],
                 "end_time": group["end_time"],
                 "duration": group["duration"],
-                "window_count": group["count"]
+                "window_count": group["count"],
+                "avg_confidence": avg_confidence
+            })
+            
+            # Auto-learning logic based on confidence
+            if group["movement"] != "still":  # Don't auto-learn still periods for now
+                # Extract the segment data for potential training
+                start_time_ms = group["start_time"]
+                end_time_ms = group["end_time"]
+                
+                # Find corresponding rows in original dataframe
+                segment_mask = (df['rel_timestamp'] >= start_time_ms) & (df['rel_timestamp'] <= end_time_ms)
+                df_segment = df[segment_mask].copy()
+                
+                if len(df_segment) > 10:  # Only if we have enough data points
+                    learning_action = None
+                    detection_id = None
+                    
+                    if avg_confidence >= 0.95:
+                        # High confidence: Auto-add to training data
+                        detection_id = save_detected_segment_for_learning(
+                            df_segment, group["movement"], avg_confidence, 
+                            start_time_ms, end_time_ms
+                        )
+                        learning_action = "auto_added"
+                        
+                    elif avg_confidence >= 0.70:
+                        # Medium confidence: Save for user confirmation
+                        detection_id = save_detected_segment_for_learning(
+                            df_segment, group["movement"], avg_confidence, 
+                            start_time_ms, end_time_ms
+                        )
+                        learning_action = "needs_confirmation"
+                        
+                    elif avg_confidence < 0.70:
+                        # Low confidence: Save and ask user what it actually was
+                        detection_id = save_detected_segment_for_learning(
+                            df_segment, group["movement"], avg_confidence, 
+                            start_time_ms, end_time_ms
+                        )
+                        learning_action = "needs_correction"
+                    
+                    if detection_id:
+                        auto_learning_results.append({
+                            "detection_id": detection_id,
+                            "predicted_movement": group["movement"],
+                            "confidence": avg_confidence,
+                            "action": learning_action,
+                            "start_time": start_time_ms,
+                            "end_time": end_time_ms
+                        })
+        
+        # Add raw groups info for debugging
+        all_groups_info = []
+        for group in groups:
+            all_groups_info.append({
+                "movement": group["movement"],
+                "start_time": group["start_time"],
+                "end_time": group["end_time"],
+                "duration": group["duration"],
+                "window_count": group["count"],
+                "is_significant": group["count"] >= 2
             })
         
         return {
@@ -169,6 +319,8 @@ async def predict_gesture(csv_data: str = Form(...)):
             "significant_movements": significant_movements,
             "still_phases": still_phases,
             "detailed_segments": detailed_segments,
+            "auto_learning": auto_learning_results,  # New: Auto-learning results
+            "all_groups": all_groups_info,  # Added for debugging
             "raw_window_predictions": {
                 "predictions": window_preds,
                 "smoothed_predictions": smoothed_preds,
@@ -435,4 +587,146 @@ async def delete_all_training_data():
         
         return {"message": f"Successfully deleted {deleted_count} training data files"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error deleting training data: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"Error deleting training data: {str(e)}")
+
+@router.get("/pending-training-data")
+async def list_pending_training_data():
+    """
+    List all pending training data that needs user confirmation or correction.
+    """
+    if not os.path.exists(PENDING_TRAINING_DIR):
+        return {"pending_items": []}
+    
+    try:
+        pending_items = []
+        json_files = [f for f in os.listdir(PENDING_TRAINING_DIR) if f.endswith('.json')]
+        
+        for json_file in json_files:
+            json_path = os.path.join(PENDING_TRAINING_DIR, json_file)
+            with open(json_path, 'r') as f:
+                metadata = json.load(f)
+                if metadata.get("status") == "pending":
+                    pending_items.append(metadata)
+        
+        # Sort by timestamp (newest first)
+        pending_items.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        
+        return {"pending_items": pending_items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing pending training data: {str(e)}")
+
+@router.post("/confirm-detection/{detection_id}")
+async def confirm_detection(detection_id: str, correct_movement: str = Form(...)):
+    """
+    Confirm or correct a detected movement and add it to training data.
+    
+    Args:
+        detection_id: The ID of the detection to confirm
+        correct_movement: The correct movement type (tap, wrist_rotation, still)
+    """
+    try:
+        # Find the metadata file
+        metadata_files = [f for f in os.listdir(PENDING_TRAINING_DIR) 
+                         if f.endswith('.json') and detection_id in f]
+        
+        if not metadata_files:
+            raise HTTPException(status_code=404, detail=f"Detection {detection_id} not found")
+        
+        metadata_path = os.path.join(PENDING_TRAINING_DIR, metadata_files[0])
+        
+        # Load metadata
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        
+        # Load the CSV data
+        csv_path = os.path.join(PENDING_TRAINING_DIR, metadata["csv_file"])
+        if not os.path.exists(csv_path):
+            raise HTTPException(status_code=404, detail=f"CSV file for detection {detection_id} not found")
+        
+        # Read the CSV data
+        df = pd.read_csv(csv_path)
+        
+        # Add to training data with the correct label
+        os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
+        existing_files = [f for f in os.listdir(TRAINING_DATA_DIR) if f.startswith(f"{correct_movement}_")]
+        sample_num = len(existing_files) + 1
+        
+        training_file_path = os.path.join(TRAINING_DATA_DIR, f"{correct_movement}_{sample_num:03d}.csv")
+        df.to_csv(training_file_path, index=False)
+        
+        # Update metadata status
+        metadata["status"] = "confirmed"
+        metadata["correct_movement"] = correct_movement
+        metadata["confirmed_at"] = datetime.now().isoformat()
+        
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        # Check if we should auto-retrain (if we have enough new samples)
+        confirmed_count = len([f for f in os.listdir(PENDING_TRAINING_DIR) 
+                              if f.endswith('.json')])
+        
+        message = f"Detection confirmed as '{correct_movement}' and added to training data"
+        if confirmed_count >= 10:
+            message += ". Consider retraining the model with new data."
+        
+        return {"message": message, "training_file": f"{correct_movement}_{sample_num:03d}.csv"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error confirming detection: {str(e)}")
+
+@router.delete("/reject-detection/{detection_id}")
+async def reject_detection(detection_id: str):
+    """
+    Reject a detected movement (don't add to training data).
+    """
+    try:
+        # Find and update metadata
+        metadata_files = [f for f in os.listdir(PENDING_TRAINING_DIR) 
+                         if f.endswith('.json') and detection_id in f]
+        
+        if not metadata_files:
+            raise HTTPException(status_code=404, detail=f"Detection {detection_id} not found")
+        
+        metadata_path = os.path.join(PENDING_TRAINING_DIR, metadata_files[0])
+        
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        
+        metadata["status"] = "rejected"
+        metadata["rejected_at"] = datetime.now().isoformat()
+        
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        return {"message": f"Detection {detection_id} rejected"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error rejecting detection: {str(e)}")
+
+@router.post("/auto-retrain")
+async def auto_retrain(background_tasks: BackgroundTasks):
+    """
+    Automatically retrain the model if there are enough confirmed samples.
+    """
+    try:
+        # Count confirmed samples
+        confirmed_files = []
+        if os.path.exists(PENDING_TRAINING_DIR):
+            json_files = [f for f in os.listdir(PENDING_TRAINING_DIR) if f.endswith('.json')]
+            for json_file in json_files:
+                json_path = os.path.join(PENDING_TRAINING_DIR, json_file)
+                with open(json_path, 'r') as f:
+                    metadata = json.load(f)
+                    if metadata.get("status") == "confirmed":
+                        confirmed_files.append(json_file)
+        
+        if len(confirmed_files) >= 5:  # Retrain if we have 5+ new confirmed samples
+            # Trigger retraining
+            background_tasks.add_task(train_model)
+            return {"message": f"Auto-retraining started with {len(confirmed_files)} new confirmed samples"}
+        else:
+            return {"message": f"Not enough confirmed samples for retraining ({len(confirmed_files)}/5)"}
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error in auto-retrain: {str(e)}")

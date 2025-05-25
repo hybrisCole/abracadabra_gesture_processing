@@ -80,6 +80,7 @@ async def get_atomic_movement_form():
             .counter-wrist { background-color: rgba(33, 150, 243, 0.2); }
             .counter-still { background-color: rgba(158, 158, 158, 0.2); }
             .counter-count { font-size: 24px; font-weight: bold; }
+            .full-recording-form { border-top: 2px solid #4169e1; margin-top: 30px; padding-top: 20px; }
         </style>
     </head>
     <body>
@@ -172,6 +173,26 @@ async def get_atomic_movement_form():
             
             <button type="submit">Test Classification</button>
             <div id="testResult" class="result"></div>
+        </form>
+        
+        <form id="fullRecordingForm" class="full-recording-form">
+            <h2>Test Full 4-Second Recording</h2>
+            <p>After training the model, you can test a full 4-second recording from your XIAO device to detect all movements within the stream.</p>
+            
+            <div class="info-box" style="background-color: #e8f5e9; border-left-color: #4CAF50; margin-bottom: 15px;">
+                <h4>What this does:</h4>
+                <ul>
+                    <li>Analyzes your full 4-second recording using a sliding window approach</li>
+                    <li>Detects all tap movements, wrist rotations, and still periods</li>
+                    <li>Provides timing information and confidence scores</li>
+                    <li>Shows detailed breakdown of each detected movement segment</li>
+                </ul>
+            </div>
+            
+            <textarea id="fullRecordingData" placeholder="Paste your full 4-second CSV recording here (this should contain ~1000 data points at 250Hz)..."></textarea>
+            
+            <button type="submit">Analyze Full Recording</button>
+            <div id="fullRecordingResult" class="result"></div>
         </form>
         
         <script>
@@ -304,6 +325,256 @@ async def get_atomic_movement_form():
                     result.innerHTML = `<p style="color:red;">❌ Error: ${error.message}</p>`;
                 }
             });
+            
+            document.getElementById('fullRecordingForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                const csvData = document.getElementById('fullRecordingData').value;
+                const result = document.getElementById('fullRecordingResult');
+                
+                result.style.display = 'block';
+                result.innerHTML = 'Processing full recording... This may take a few seconds.';
+                
+                try {
+                    const response = await fetch('/api/predict', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        },
+                        body: new URLSearchParams({
+                            'csv_data': csvData
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    if (response.ok) {
+                        // Format the results nicely
+                        let resultHtml = `<h3 style="color:green;">✅ Analysis Complete</h3>`;
+                        
+                        // Movement counts
+                        if (data.significant_movements && Object.keys(data.significant_movements).length > 0) {
+                            resultHtml += `<h4>Detected Movements:</h4><ul>`;
+                            Object.entries(data.significant_movements).forEach(([movement, count]) => {
+                                resultHtml += `<li><strong>${movement}</strong>: ${count} occurrence(s)</li>`;
+                            });
+                            resultHtml += `</ul>`;
+                        } else {
+                            resultHtml += `<p>No significant movements detected in this recording.</p>`;
+                        }
+                        
+                        // Still phases
+                        if (data.still_phases > 0) {
+                            resultHtml += `<p><strong>Still phases:</strong> ${data.still_phases} period(s)</p>`;
+                        }
+                        
+                        // Detailed timeline
+                        if (data.detailed_segments && data.detailed_segments.length > 0) {
+                            resultHtml += `
+                                <h4>Timeline of Events:</h4>
+                                <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                                    <tr style="background-color: #f2f2f2;">
+                                        <th style="padding: 8px; border: 1px solid #ddd;">Movement</th>
+                                        <th style="padding: 8px; border: 1px solid #ddd;">Start Time (ms)</th>
+                                        <th style="padding: 8px; border: 1px solid #ddd;">End Time (ms)</th>
+                                        <th style="padding: 8px; border: 1px solid #ddd;">Duration (ms)</th>
+                                    </tr>
+                            `;
+                            
+                            data.detailed_segments.forEach(segment => {
+                                const rowColor = segment.movement === 'still' ? '#f9f9f9' : 
+                                               segment.movement === 'tap' ? '#e8f5e9' : '#e3f2fd';
+                                resultHtml += `
+                                    <tr style="background-color: ${rowColor};">
+                                        <td style="padding: 8px; border: 1px solid #ddd;"><strong>${segment.movement}</strong></td>
+                                        <td style="padding: 8px; border: 1px solid #ddd;">${Math.round(segment.start_time)}</td>
+                                        <td style="padding: 8px; border: 1px solid #ddd;">${Math.round(segment.end_time)}</td>
+                                        <td style="padding: 8px; border: 1px solid #ddd;">${Math.round(segment.duration)}</td>
+                                    </tr>
+                                `;
+                            });
+                            
+                            resultHtml += `</table>`;
+                        }
+                        
+                        // Auto-learning results
+                        if (data.auto_learning && data.auto_learning.length > 0) {
+                            resultHtml += `<h4>🤖 Auto-Learning Results:</h4>`;
+                            data.auto_learning.forEach(item => {
+                                let actionText = '';
+                                let actionClass = '';
+                                
+                                switch(item.action) {
+                                    case 'auto_added':
+                                        actionText = '✅ Automatically added to training data (high confidence)';
+                                        actionClass = 'success';
+                                        break;
+                                    case 'needs_confirmation':
+                                        actionText = '⚠️ Saved for confirmation (medium confidence)';
+                                        actionClass = 'warning';
+                                        break;
+                                    case 'needs_correction':
+                                        actionText = '❓ Saved for correction (low confidence)';
+                                        actionClass = 'error';
+                                        break;
+                                }
+                                
+                                resultHtml += `
+                                    <div style="margin: 10px 0; padding: 10px; border-left: 4px solid ${
+                                        item.action === 'auto_added' ? '#4CAF50' : 
+                                        item.action === 'needs_confirmation' ? '#FF9800' : '#F44336'
+                                    }; background-color: #f9f9f9;">
+                                        <strong>${item.predicted_movement}</strong> 
+                                        (${(item.confidence * 100).toFixed(1)}% confidence)
+                                        <br>${actionText}
+                                        <br>Time: ${item.start_time}ms - ${item.end_time}ms
+                                        <br>ID: ${item.detection_id}
+                                    </div>
+                                `;
+                            });
+                            
+                            // Add link to manage pending items
+                            const pendingItems = data.auto_learning.filter(item => 
+                                item.action === 'needs_confirmation' || item.action === 'needs_correction'
+                            );
+                            
+                            if (pendingItems.length > 0) {
+                                resultHtml += `
+                                    <div style="margin: 15px 0; padding: 15px; background-color: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px;">
+                                        <p><strong>📋 ${pendingItems.length} items need your attention!</strong></p>
+                                        <button onclick="showPendingItems()" style="background-color: #007bff; color: white; padding: 8px 15px; border: none; border-radius: 3px; cursor: pointer;">
+                                            Manage Pending Detections
+                                        </button>
+                                    </div>
+                                `;
+                            }
+                        }
+                        
+                        // Technical details (collapsible)
+                        resultHtml += `
+                            <details style="margin-top: 20px;">
+                                <summary style="cursor: pointer; font-weight: bold;">Technical Details</summary>
+                                <div style="margin-top: 10px; padding: 10px; background-color: #f5f5f5; border-radius: 5px;">
+                                    <p><strong>Window Size:</strong> ${data.window_params.window_size_ms}ms</p>
+                                    <p><strong>Window Overlap:</strong> ${data.window_params.overlap_ms}ms</p>
+                                    <p><strong>Sample Rate:</strong> ${data.window_params.sample_rate_hz}Hz</p>
+                                    <p><strong>Total Windows Analyzed:</strong> ${data.raw_window_predictions.predictions.length}</p>
+                                </div>
+                            </details>
+                        `;
+                        
+                        result.innerHTML = resultHtml;
+                    } else {
+                        result.innerHTML = `<p style="color:red;">❌ Error: ${data.detail || JSON.stringify(data)}</p>`;
+                    }
+                } catch (error) {
+                    result.innerHTML = `<p style="color:red;">❌ Error: ${error.message}</p>`;
+                }
+            });
+            
+            // Function to show pending items management
+            async function showPendingItems() {
+                try {
+                    const response = await fetch('/api/pending-training-data');
+                    const data = await response.json();
+                    
+                    if (data.pending_items.length === 0) {
+                        alert('No pending items to review!');
+                        return;
+                    }
+                    
+                    let pendingHtml = `
+                        <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); z-index: 1000;">
+                            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 10px; max-width: 80%; max-height: 80%; overflow-y: auto;">
+                                <h3>Pending Detections (${data.pending_items.length} items)</h3>
+                                <div id="pendingItemsList">
+                    `;
+                    
+                    data.pending_items.forEach(item => {
+                        const confidenceColor = item.confidence >= 0.7 ? '#FF9800' : '#F44336';
+                        pendingHtml += `
+                            <div style="margin: 15px 0; padding: 15px; border: 1px solid ${confidenceColor}; border-radius: 5px;">
+                                <h4>Predicted: ${item.predicted_movement} (${(item.confidence * 100).toFixed(1)}% confidence)</h4>
+                                <p>Time: ${item.start_time}ms - ${item.end_time}ms (${item.duration.toFixed(0)}ms duration)</p>
+                                <p>Detection ID: ${item.detection_id}</p>
+                                
+                                <div style="margin-top: 10px;">
+                                    <label>Correct movement type:</label>
+                                    <select id="correct_${item.detection_id}" style="margin: 0 10px;">
+                                        <option value="tap" ${item.predicted_movement === 'tap' ? 'selected' : ''}>tap</option>
+                                        <option value="still" ${item.predicted_movement === 'still' ? 'selected' : ''}>still</option>
+                                        <option value="wrist_rotation" ${item.predicted_movement === 'wrist_rotation' ? 'selected' : ''}>wrist_rotation</option>
+                                    </select>
+                                    <button onclick="confirmDetection('${item.detection_id}')" style="background-color: #4CAF50; color: white; padding: 5px 10px; border: none; border-radius: 3px; margin-right: 5px;">Confirm</button>
+                                    <button onclick="rejectDetection('${item.detection_id}')" style="background-color: #F44336; color: white; padding: 5px 10px; border: none; border-radius: 3px;">Reject</button>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    
+                    pendingHtml += `
+                                </div>
+                                <button onclick="closePendingModal()" style="background-color: #6c757d; color: white; padding: 10px 15px; border: none; border-radius: 3px; margin-top: 15px;">Close</button>
+                            </div>
+                        </div>
+                    `;
+                    
+                    document.body.insertAdjacentHTML('beforeend', pendingHtml);
+                } catch (error) {
+                    alert('Error loading pending items: ' + error.message);
+                }
+            }
+            
+            function closePendingModal() {
+                const modal = document.querySelector('div[style*="position: fixed"]');
+                if (modal) modal.remove();
+            }
+            
+            async function confirmDetection(detectionId) {
+                const correctMovement = document.getElementById(`correct_${detectionId}`).value;
+                
+                try {
+                    const response = await fetch(`/api/confirm-detection/${detectionId}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        },
+                        body: new URLSearchParams({
+                            'correct_movement': correctMovement
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    if (response.ok) {
+                        alert('✅ ' + data.message);
+                        // Refresh the pending items list
+                        closePendingModal();
+                        showPendingItems();
+                    } else {
+                        alert('❌ Error: ' + data.detail);
+                    }
+                } catch (error) {
+                    alert('❌ Error: ' + error.message);
+                }
+            }
+            
+            async function rejectDetection(detectionId) {
+                try {
+                    const response = await fetch(`/api/reject-detection/${detectionId}`, {
+                        method: 'DELETE'
+                    });
+                    
+                    const data = await response.json();
+                    if (response.ok) {
+                        alert('✅ ' + data.message);
+                        // Refresh the pending items list
+                        closePendingModal();
+                        showPendingItems();
+                    } else {
+                        alert('❌ Error: ' + data.detail);
+                    }
+                } catch (error) {
+                    alert('❌ Error: ' + error.message);
+                }
+            }
         </script>
     </body>
     </html>

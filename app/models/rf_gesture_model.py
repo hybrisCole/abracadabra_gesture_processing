@@ -310,7 +310,11 @@ class RandomForestGestureModel:
             feature_vector = np.nan_to_num(feature_vector, nan=0.0, posinf=0.0, neginf=0.0)
             
             # Handle the case of augmented data (strip _augX suffix for label)
-            base_gesture = gesture_name.split('_aug')[0]
+            if '_aug' in gesture_name:
+                base_gesture = gesture_name.split('_aug')[0]
+            else:
+                # Data is already properly grouped by movement type from data_handler
+                base_gesture = gesture_name
             
             # Add to training data
             X.append(feature_vector)

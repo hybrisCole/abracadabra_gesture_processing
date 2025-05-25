@@ -4,11 +4,13 @@ A FastAPI-based HTTP API for training and recognizing gestures from IMU sensor d
 
 ## Features
 
-- Train gesture recognition models using IMU data (accelerometer and gyroscope)
-- Upload CSV files containing sensor data for different gestures
-- Compare new gesture data against trained models to find the closest match
-- Dynamic Time Warping (DTW) algorithm for sequence comparison
+- Train models to recognize atomic movements (taps, wrist rotations, still periods)
+- Upload CSV files containing sensor data for different movement types
+- Detect and count occurrences of movements within longer data streams
+- Advanced feature extraction for IMU data analysis
+- Random Forest classifier for robust movement detection
 - RESTful API with Swagger documentation
+- Web interface for data collection and testing
 
 ## Project Structure
 
@@ -56,54 +58,69 @@ uvicorn app.main:app --reload
 The API will be available at http://localhost:8000.
 API documentation is available at http://localhost:8000/docs.
 
+### Web Interface
+
+The system provides several web interfaces:
+
+- **Home**: http://localhost:8000/
+- **Atomic Movement Upload Form**: http://localhost:8000/atomic-movement-form
+  - Use this specialized form to upload and label short segments of tap, wrist rotation, and still movements
+- **Standard Upload Form**: http://localhost:8000/upload-form
+- **Model Details**: http://localhost:8000/model-details
+
 ### API Endpoints
 
-- **POST /api/upload-training-data/{gesture_name}**: Upload CSV training data for a specific gesture
+#### Training Endpoints
+- **POST /api/upload-training-data**: Upload CSV training data for a specific movement
 - **POST /api/train**: Train the model using uploaded training data
-- **POST /api/predict**: Submit new IMU data to find the closest matching gesture
 - **GET /api/model-status**: Check the current status of the model
 - **GET /api/training-data**: List available training data
-- **DELETE /api/training-data/{gesture_name}**: Delete training data for a specific gesture
+- **DELETE /api/training-data/{movement_name}**: Delete training data for a specific movement
+
+#### Prediction Endpoints
+- **POST /api/predict**: Submit new 5-second IMU data to find all movements within the stream
+- **POST /api/predict-window**: Test classification of a single short movement sample
 
 ### CSV Data Format
 
 The CSV files should have the following columns:
-- timeline
-- accX (accelerometer X-axis)
-- accY (accelerometer Y-axis)
-- accZ (accelerometer Z-axis)
-- gyroX (gyroscope X-axis)
-- gyroY (gyroscope Y-axis)
-- gyroZ (gyroscope Z-axis)
+- rel_timestamp (relative timestamp)
+- recording_id (identifier for the recording)
+- acc_x (accelerometer X-axis)
+- acc_y (accelerometer Y-axis)
+- acc_z (accelerometer Z-axis)
+- gyro_x (gyroscope X-axis)
+- gyro_y (gyroscope Y-axis)
+- gyro_z (gyroscope Z-axis)
 
-## Example Workflow
+## Workflow for Atomic Movement Detection
 
-1. Upload training data for different gestures:
-   ```
-   curl -X POST -F "file=@gesture1.csv" http://localhost:8000/api/upload-training-data/gesture1
-   curl -X POST -F "file=@gesture2.csv" http://localhost:8000/api/upload-training-data/gesture2
-   curl -X POST -F "file=@gesture3.csv" http://localhost:8000/api/upload-training-data/gesture3
-   ```
+1. **Collect Training Samples**:
+   - Create short CSV samples (~350ms) for "tap" movements
+   - Create short CSV samples (~500ms) for "wrist_rotation" movements
+   - Create short CSV samples (~300-500ms) for "still" (non-movement) periods
+   - Use the Atomic Movement Upload Form to label and upload these samples
 
-2. Train the model:
-   ```
-   curl -X POST http://localhost:8000/api/train
-   ```
+2. **Train the Model**:
+   - After uploading at least 20-30 samples of each movement type
+   - Hit the train endpoint: `curl -X POST http://localhost:8000/api/train`
+   - Check training progress via the Model Details page
 
-3. Check model status:
-   ```
-   curl http://localhost:8000/api/model-status
-   ```
+3. **Test the Model**:
+   - Test individual windows with the "Test Single Movement Window" section of the form
+   - Validate model accuracy for each movement type
 
-4. Predict a gesture from new data:
-   ```
-   curl -X POST -F "file=@new_gesture.csv" http://localhost:8000/api/predict
-   ```
+4. **Use for Movement Detection**:
+   - Send 5-second CSV data to the `/api/predict` endpoint
+   - The API will return counts and timings of each detected movement
+   - It will also identify "still" phases between movements
 
 ## How It Works
 
-1. The system collects IMU data from a XIAO nRF52840 Sense microcontroller in CSV format.
-2. Training data for different gestures is uploaded to the server.
-3. The model processes the training data, extracting features and storing templates.
-4. For gesture recognition, the system uses Dynamic Time Warping (DTW) to compare new data with stored templates.
-5. The API returns the closest matching gesture along with similarity scores. 
+1. The system collects short samples of atomic movements (tap, wrist_rotation, still)
+2. A Random Forest model is trained to classify these atomic movements based on extracted features
+3. For detection in longer streams, a sliding window approach is used:
+   - The 5-second stream is divided into overlapping windows (default 350ms with 250ms overlap)
+   - Each window is classified as tap, wrist_rotation, or still
+   - Consecutive identical predictions are grouped into movement events
+   - The system counts and times these events, returning detailed information 
