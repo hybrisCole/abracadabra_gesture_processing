@@ -1,0 +1,12 @@
+{
+  "detection_id": "ecf3e366",
+  "predicted_movement": "tap",
+  "confidence": 0.6307692307692309,
+  "start_time": 441.7471264367816,
+  "end_time": 3390.885057471264,
+  "duration": 2949.137931034483,
+  "timestamp": "20250525_141642",
+  "csv_file": "tap_0.631_20250525_141642_ecf3e366.csv",
+  "status": "rejected",
+  "rejected_at": "2025-05-25T14:17:16.945951"
+}

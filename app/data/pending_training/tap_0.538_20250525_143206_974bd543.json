@@ -1,0 +1,13 @@
+{
+  "detection_id": "974bd543",
+  "predicted_movement": "tap",
+  "confidence": 0.5375000000000001,
+  "start_time": 1163.287356321839,
+  "end_time": 1893.83908045977,
+  "duration": 730.5517241379309,
+  "timestamp": "20250525_143206",
+  "csv_file": "tap_0.538_20250525_143206_974bd543.csv",
+  "status": "confirmed",
+  "correct_movement": "tap",
+  "confirmed_at": "2025-05-25T14:33:02.442813"
+}
