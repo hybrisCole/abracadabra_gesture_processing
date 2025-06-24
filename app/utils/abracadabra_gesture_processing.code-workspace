@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../../../abracadabra_sense_arduino"
+		},
+		{
+			"path": "../../../abracadabra_app"
 		}
 	],
 	"settings": {}
