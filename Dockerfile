@@ -65,5 +65,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/ || exit 1
 
-# Production command using gunicorn for better performance
-CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--access-logfile", "-", "--error-logfile", "-"] 
+# Production command - Railway will use Procfile over this
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"] 
