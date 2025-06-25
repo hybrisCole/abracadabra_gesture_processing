@@ -11,11 +11,13 @@ from app.api.router import router
 # Create data directories if they don't exist
 os.makedirs("app/data/training", exist_ok=True)
 
-# Create FastAPI app
+# Create FastAPI app with Railway-specific configuration
 app = FastAPI(
-    title="Gesture Recognition API",
-    description="API for training and predicting gestures from IMU sensor data",
-    version="1.0.0"
+    title=os.getenv("API_TITLE", "Abracadabra Gesture Recognition API"),
+    description="ML-powered gesture recognition API for XIAO nRF52840 Sense IMU data",
+    version=os.getenv("API_VERSION", "1.0.0"),
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 # Add CORS middleware
@@ -30,16 +32,36 @@ app.add_middleware(
 # Include router
 app.include_router(router, prefix="/api")
 
-# Root endpoint
+# Root endpoint with Railway deployment info
 @app.get("/")
 async def root():
     return {
-        "message": "Gesture Recognition API with Random Forest",
-        "docs_url": "/docs",
-        "upload_form": "/upload-form",
-        "atomic_movement_form": "/atomic-movement-form",
-        "model_details": "/model-details",
-        "status": "running"
+        "message": "Abracadabra Gesture Recognition API",
+        "description": "ML-powered gesture recognition for XIAO nRF52840 Sense",
+        "version": os.getenv("API_VERSION", "1.0.0"),
+        "environment": os.getenv("RAILWAY_ENVIRONMENT", "development"),
+        "endpoints": {
+            "docs": "/docs",
+            "upload_form": "/upload-form", 
+            "atomic_movement_form": "/atomic-movement-form",
+            "model_details": "/model-details",
+            "api_status": "/api/model-status",
+            "train": "/api/train",
+            "predict": "/api/predict"
+        },
+        "status": "running",
+        "deployment": "Railway"
+    }
+
+# Railway health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Railway deployment monitoring"""
+    return {
+        "status": "healthy",
+        "service": "gesture-recognition-api",
+        "environment": os.getenv("RAILWAY_ENVIRONMENT", "development"),
+        "port": os.getenv("PORT", "8000")
     }
 
 @app.get("/atomic-movement-form", response_class=HTMLResponse)

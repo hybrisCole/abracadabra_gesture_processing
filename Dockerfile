@@ -59,12 +59,12 @@ RUN chown -R appuser:appuser /app
 # Switch to non-root user
 USER appuser
 
-# Expose port
-EXPOSE 8000
+# Expose port (Railway will override this)
+EXPOSE $PORT
 
-# Health check for AWS deployment
+# Health check for Railway deployment
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/ || exit 1
+    CMD curl -f http://localhost:$PORT/ || exit 1
 
-# Use shell form to properly expand environment variables
-CMD ["/bin/bash", "-c", "./start.sh"] 
+# Use Railway-standard command
+CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT 
