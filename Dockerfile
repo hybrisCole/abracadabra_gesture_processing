@@ -1,5 +1,5 @@
-# Multi-stage build for production optimization
-FROM python:3.11-slim as builder
+# Railway-optimized single-stage build
+FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -7,36 +7,11 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install system dependencies for building Python packages
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create and set work directory
-WORKDIR /app
-
-# Copy pyproject.toml first for better Docker layer caching
-COPY pyproject.toml ./
-
-# Install dependencies
-RUN pip install --upgrade pip && \
-    pip install .
-
-# =====================================
-# Production stage
-# =====================================
-FROM python:3.11-slim as production
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/home/appuser/.local/bin:$PATH"
-
-# Install runtime dependencies only
-RUN apt-get update && apt-get install -y \
+# Install system dependencies (minimal)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Create non-root user for security
 RUN groupadd --gid 1000 appuser && \
@@ -45,13 +20,21 @@ RUN groupadd --gid 1000 appuser && \
 # Set work directory
 WORKDIR /app
 
-# Copy installed packages from builder stage
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Install Python dependencies directly (no build tools needed)
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir \
+    fastapi==0.108.0 \
+    uvicorn==0.27.0 \
+    numpy==1.26.4 \
+    pandas==2.2.3 \
+    scikit-learn==1.6.1 \
+    dtw-python==1.3.0 \
+    python-multipart==0.0.7 \
+    pydantic==2.11.3 \
+    joblib==1.3.2
 
-# Copy application code and startup script
+# Copy application code
 COPY app/ ./app/
-COPY start.sh ./start.sh
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
@@ -59,12 +42,8 @@ RUN chown -R appuser:appuser /app
 # Switch to non-root user
 USER appuser
 
-# Expose port (Railway will override this)
-EXPOSE $PORT
-
-# Health check for Railway deployment
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:$PORT/ || exit 1
+# Expose port
+EXPOSE 8000
 
 # Use Railway-standard command
 CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT 
