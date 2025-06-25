@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  # Development service with hot reloading
+  gesture-api-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder  # Use builder stage for dev
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source code for hot reloading
+      - ./app:/app/app
+      # Mount data directory for model persistence
+      - ./app/data:/app/app/data
+    environment:
+      - PYTHONPATH=/app
+      - ENVIRONMENT=development
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Production-like service (for testing)
+  gesture-api-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production  # Use production stage
+    ports:
+      - "8001:8000"
+    volumes:
+      # Only mount data directory (no source code)
+      - ./app/data:/app/app/data
+    environment:
+      - ENVIRONMENT=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Optional: Add a reverse proxy for production simulation
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - gesture-api-prod
+    restart: unless-stopped
+    profiles:
+      - production-test
+
+networks:
+  default:
+    name: gesture-api-network 

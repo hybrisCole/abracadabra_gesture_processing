@@ -1,0 +1,157 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abracadabra-gesture-processing"
+version = "1.0.0"
+description = "Production-ready FastAPI app for real-time gesture recognition using machine learning"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Alberto Cole", email = "alberto@example.com" }
+]
+keywords = ["fastapi", "machine-learning", "gesture-recognition", "iot", "aws"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Framework :: FastAPI",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Production dependencies from requirements.txt
+dependencies = [
+    "fastapi==0.108.0",
+    "uvicorn[standard]==0.27.0",
+    "numpy==1.26.4",
+    "pandas==2.2.3",
+    "scikit-learn==1.6.1",
+    "dtw-python==1.3.0",
+    "python-multipart==0.0.7",
+    "pydantic==2.11.3",
+    "joblib==1.3.2",
+    "matplotlib==3.10.1"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "pre-commit>=3.0.0"
+]
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.24.0",
+    "pytest-cov>=4.0.0"
+]
+deploy = [
+    "gunicorn>=21.2.0"
+]
+
+# Entry points for CLI usage
+[project.scripts]
+gesture-api = "app.main:main"
+
+# URLs for package metadata
+[project.urls]
+Homepage = "https://github.com/albertocole/abracadabra-gesture-processing"
+Repository = "https://github.com/albertocole/abracadabra-gesture-processing"
+Documentation = "https://github.com/albertocole/abracadabra-gesture-processing#readme"
+Issues = "https://github.com/albertocole/abracadabra-gesture-processing/issues"
+
+# Tool configurations
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["data/*.joblib", "data/training/*.csv"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.git
+  | \.mypy_cache
+  | \.pytest_cache
+  | \.ruff_cache
+  | \.venv
+  | venv
+  | __pycache__
+)/
+'''
+
+[tool.ruff]
+target-version = "py39"
+line-length = 88
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.9"
+check_untyped_defs = true
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true
+exclude = [
+    "venv/",
+    ".venv/",
+    "tests/",
+]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "tests/*",
+    "venv/*",
+    ".venv/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+] 
