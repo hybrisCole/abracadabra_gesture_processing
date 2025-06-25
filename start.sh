@@ -1,10 +1,5 @@
 #!/bin/bash
 
-# Handle Railway's PORT variable gracefully
-if [ -z "$PORT" ] || [ "$PORT" = '$PORT' ] || ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
-    echo "PORT variable is invalid or empty, using default port 8000"
-    PORT=8000
-fi
-
-echo "Starting uvicorn on port: $PORT"
-exec uvicorn app.main:app --host 0.0.0.0 --port $PORT 
+# Force port 8000 - ignore Railway's broken PORT variable
+echo "Starting uvicorn on port 8000 (ignoring Railway PORT variable)"
+exec uvicorn app.main:app --host 0.0.0.0 --port 8000 
