@@ -66,5 +66,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/ || exit 1
 
-# Use startup script to bypass Railway PORT variable issues
-CMD ["./start.sh"] 
+# Use shell form to properly expand environment variables
+CMD ["/bin/bash", "-c", "./start.sh"] 
