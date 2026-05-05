@@ -47,7 +47,7 @@ class RandomForestGestureModel:
         self.optimal_window_size = None  # Can be set after experimentation
         self.optimal_window_overlap = None  # Can be set after experimentation
 
-    def preprocess_data(self, data: pd.DataFrame) -> pd.DataFrame:
+    def preprocess_data(self, data: pd.DataFrame, sample_rate_hz: float = 250.0) -> pd.DataFrame:
         """
         Preprocess IMU data for feature extraction.
         
@@ -64,11 +64,11 @@ class RandomForestGestureModel:
         imu_data['acc_mag'] = np.sqrt(imu_data['acc_x']**2 + imu_data['acc_y']**2 + imu_data['acc_z']**2)
         imu_data['gyro_mag'] = np.sqrt(imu_data['gyro_x']**2 + imu_data['gyro_y']**2 + imu_data['gyro_z']**2)
         
-        # Apply a Butterworth bandpass filter to reduce noise and focus on relevant frequencies
-        # Human gestures are typically in the 0.5-20 Hz range
-        nyquist = 0.5 * 250  # Assume 250 Hz sampling rate
+        # Apply a Butterworth bandpass filter to reduce noise and focus on relevant frequencies.
+        # Human gestures are typically in the 0.5-20 Hz range.
+        nyquist = 0.5 * float(sample_rate_hz)
         low = 0.5 / nyquist
-        high = 20.0 / nyquist
+        high = min(20.0 / nyquist, 0.99)
         
         # Apply filter if we have enough data points
         # Adjusted minimum threshold to accommodate shorter windows (e.g., 350ms at 250Hz ≈ 88 samples)
@@ -88,7 +88,7 @@ class RandomForestGestureModel:
         
         return imu_data
     
-    def extract_features(self, data: pd.DataFrame) -> Dict[str, float]:
+    def extract_features(self, data: pd.DataFrame, sample_rate_hz: float = 250.0) -> Dict[str, float]:
         """
         Extract comprehensive time and frequency domain features from IMU data.
         Optimized to work with shorter atomic movement windows.
@@ -152,7 +152,7 @@ class RandomForestGestureModel:
                 # Compute the power spectral density - adjust nperseg for shorter windows
                 # For short windows (e.g., 350ms at 250Hz ≈ 88 samples), use a smaller nperseg
                 nperseg = min(128, max(len(data) // 2, 16))  # At least 16 samples, at most 128
-                f, Pxx = signal.welch(data[col].values, fs=250, nperseg=nperseg)
+                f, Pxx = signal.welch(data[col].values, fs=float(sample_rate_hz), nperseg=nperseg)
                 
                 # Dominant frequency components
                 if len(Pxx) > 0:
@@ -277,6 +277,15 @@ class RandomForestGestureModel:
         
         return augmented_data
     
+    def _infer_sample_rate_hz(self, data: pd.DataFrame, default_hz: float = 200.0) -> float:
+        if "rel_timestamp" not in data.columns or len(data) < 2:
+            return default_hz
+        deltas = np.diff(data["rel_timestamp"].astype(float).to_numpy())
+        deltas = deltas[deltas > 0]
+        if len(deltas) == 0:
+            return default_hz
+        return float(np.clip(1000.0 / np.median(deltas), 50.0, 500.0))
+
     def prepare_training_data(self, training_data: Dict[str, pd.DataFrame]) -> Tuple[np.ndarray, np.ndarray, List[str]]:
         """
         Prepare training data for the Random Forest classifier.
@@ -293,11 +302,11 @@ class RandomForestGestureModel:
         feature_names = None
         
         for gesture_name, data in training_data.items():
-            # Preprocess the data
-            preprocessed = self.preprocess_data(data)
+            sample_rate_hz = self._infer_sample_rate_hz(data)
+            preprocessed = self.preprocess_data(data, sample_rate_hz=sample_rate_hz)
             
             # Extract features
-            features = self.extract_features(preprocessed)
+            features = self.extract_features(preprocessed, sample_rate_hz=sample_rate_hz)
             
             if feature_names is None:
                 feature_names = list(features.keys())
@@ -315,6 +324,8 @@ class RandomForestGestureModel:
             else:
                 # Data is already properly grouped by movement type from data_handler
                 base_gesture = gesture_name
+            if '#' in base_gesture:
+                base_gesture = base_gesture.split('#', 1)[0]
             
             # Add to training data
             X.append(feature_vector)
@@ -376,7 +387,7 @@ class RandomForestGestureModel:
             self.feature_importances[feature_names[idx]] = importances[idx]
             print(f"{i+1}. {feature_names[idx]} ({importances[idx]:.4f})")
     
-    def predict(self, query_data: pd.DataFrame) -> Dict[str, Any]:
+    def predict(self, query_data: pd.DataFrame, sample_rate_hz: Optional[float] = None) -> Dict[str, Any]:
         """
         Predict the atomic movement class for a short window of data.
         
@@ -392,11 +403,11 @@ class RandomForestGestureModel:
                 "success": False
             }
         
-        # Preprocess the query data
-        preprocessed_query = self.preprocess_data(query_data)
+        effective_sample_rate_hz = float(sample_rate_hz or self._infer_sample_rate_hz(query_data))
+        preprocessed_query = self.preprocess_data(query_data, sample_rate_hz=effective_sample_rate_hz)
         
         # Extract features from the query
-        query_features = self.extract_features(preprocessed_query)
+        query_features = self.extract_features(preprocessed_query, sample_rate_hz=effective_sample_rate_hz)
         
         # Convert features to vector in the same order as training data
         feature_vector = [query_features.get(name, 0) for name in self.feature_names]
@@ -427,8 +438,8 @@ class RandomForestGestureModel:
             "success": True
         }
 
-    def predict_window_sequence(self, query_data: pd.DataFrame, window_size_ms: int = 350, 
-                              overlap_ms: int = 100, sample_rate_hz: int = 250) -> Dict[str, Any]:
+    def predict_window_sequence(self, query_data: pd.DataFrame, window_size_ms: int = 450,
+                              overlap_ms: int = 300, sample_rate_hz: float = 200.0) -> Dict[str, Any]:
         """
         Predict a sequence of atomic movements within a longer data stream using a sliding window approach.
         This is a helper method to implement the sliding window logic at the model level.
@@ -449,8 +460,8 @@ class RandomForestGestureModel:
             }
         
         # Calculate window size and step in samples
-        window_samples = int((window_size_ms / 1000) * sample_rate_hz)
-        step_samples = int(((window_size_ms - overlap_ms) / 1000) * sample_rate_hz)
+        window_samples = max(10, int((window_size_ms / 1000) * sample_rate_hz))
+        step_samples = max(1, int(((window_size_ms - overlap_ms) / 1000) * sample_rate_hz))
         
         # Check if we have enough data
         if len(query_data) < window_samples:
@@ -463,6 +474,8 @@ class RandomForestGestureModel:
         window_predictions = []
         window_confidences = []
         window_times = []  # Store the center time of each window for reference
+        window_start_times = []
+        window_end_times = []
         
         # Process each window
         for start_idx in range(0, len(query_data) - window_samples + 1, step_samples):
@@ -473,27 +486,37 @@ class RandomForestGestureModel:
             # Get window center time (from rel_timestamp)
             if 'rel_timestamp' in window_data.columns:
                 center_time = window_data['rel_timestamp'].mean()
+                start_time = float(window_data['rel_timestamp'].iloc[0])
+                end_time = float(window_data['rel_timestamp'].iloc[-1])
             else:
                 # If no timestamp, use sample index as an approximation
-                center_time = (start_idx + end_idx) / 2 / sample_rate_hz  # in seconds
+                center_time = (start_idx + end_idx) / 2 / sample_rate_hz * 1000.0
+                start_time = start_idx / sample_rate_hz * 1000.0
+                end_time = end_idx / sample_rate_hz * 1000.0
             
             # Predict for this window
-            result = self.predict(window_data)
+            result = self.predict(window_data, sample_rate_hz=sample_rate_hz)
             
             if result["success"]:
                 window_predictions.append(result["predicted_movement"])
                 window_confidences.append(result["confidence"])
                 window_times.append(center_time)
+                window_start_times.append(start_time)
+                window_end_times.append(end_time)
             else:
                 # Handle error if needed
                 window_predictions.append("error")
                 window_confidences.append(0.0)
                 window_times.append(center_time)
+                window_start_times.append(start_time)
+                window_end_times.append(end_time)
         
         return {
             "window_predictions": window_predictions,
             "window_confidences": window_confidences,
             "window_times": window_times,
+            "window_start_times": window_start_times,
+            "window_end_times": window_end_times,
             "window_size_ms": window_size_ms,
             "overlap_ms": overlap_ms,
             "sample_rate_hz": sample_rate_hz,

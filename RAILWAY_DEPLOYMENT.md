@@ -1,10 +1,10 @@
 # Railway Deployment Guide
 
-## 🚀 Abracadabra Gesture Recognition API on Railway
+## Abracadabra Gesture Recognition API on Railway
 
-This project is configured for deployment on Railway with proper configuration files and best practices.
+This project is configured for Railway as the JSON-only gesture processing server used by `abracadabra-rnapp`.
 
-## 📁 Railway Configuration Files
+## Railway Configuration Files
 
 - **`railway.toml`** - Main Railway configuration
 - **`Procfile`** - Process definition for Railway
@@ -13,7 +13,7 @@ This project is configured for deployment on Railway with proper configuration f
 - **`Dockerfile`** - Container configuration
 - **`docker-entrypoint.sh`** - Fixes ownership on **`/app/app/data`** volume mounts, then runs uvicorn as **`appuser`**
 
-## 🔧 Configuration Details
+## Configuration Details
 
 ### railway.toml
 - Defines Docker build process
@@ -21,7 +21,15 @@ This project is configured for deployment on Railway with proper configuration f
 - Configures restart policies
 - Sets environment variables
 
-### Persistent volume permissions
+### Persistent volume
+
+Mount the Railway volume at:
+
+```text
+/app/app/data
+```
+
+The service stores JSON training samples and the trained `rf_gesture_model.joblib` under this path.
 
 If you mount a Railway volume at **`/app/app/data`**, the mount is typically **root-owned**. The app runs as **`appuser` (uid 1000)**, which caused **`PermissionError`** on `app/data/training` until fixed.
 
@@ -36,14 +44,14 @@ Custom variables (set in Railway dashboard):
 - `API_TITLE` - API title (optional)
 - `API_VERSION` - API version (optional)
 
-## 🏥 Health Monitoring
+## Health Monitoring
 
 The API includes a dedicated health check endpoint:
 - **Endpoint**: `/health`
 - **Method**: GET
 - **Response**: Service status and environment info
 
-## 🚀 Deployment Process
+## Deployment Process
 
 1. **Automatic**: Push to GitHub triggers Railway deployment
 2. **Manual**: Use Railway CLI or dashboard
@@ -66,16 +74,20 @@ railway logs
 railway open
 ```
 
-## 📊 API Endpoints
+## API Endpoints
 
 - **`/`** - Root endpoint with API information
 - **`/health`** - Health check for Railway monitoring
 - **`/docs`** - FastAPI documentation
-- **`/api/predict`** - Gesture prediction endpoint
-- **`/api/train`** - Model training endpoint
-- **`/upload-form`** - Web interface for data upload
+- **`POST /api/training-samples`** - Save one labeled RN crop as JSON
+- **`GET /api/training-samples`** - List stored samples
+- **`POST /api/train`** - Train Random Forest from JSON samples
+- **`GET /api/model-status`** - Model status and labels
+- **`POST /api/recordings/classify`** - Classify one cropped window
+- **`POST /api/recordings/analyze`** - Detect timed gesture segments in a full 3-4 second recording
+- **`POST /api/gesture-passwords/verify`** - Compare detected sequence to expected gesture-password labels
 
-## 🔍 Monitoring
+## Monitoring
 
 Railway provides built-in monitoring:
 - Health checks every 30 seconds
@@ -83,7 +95,7 @@ Railway provides built-in monitoring:
 - Resource usage metrics
 - Deployment logs
 
-## 🛠️ Local Development
+## Local Development
 
 To run locally with Railway environment:
 

@@ -1,181 +1,164 @@
-# Gesture Recognition API
+# Abracadabra Gesture Processing
 
-A FastAPI-based HTTP API for training and recognizing **atomic movements** (tap, wrist rotation, still) from IMU CSV data. It targets workflows aligned with a **Seeed XIAO nRF52840 Sense** companion pipeline; exported CSV **columns** match what this service expects (see below)—they are **not** identical to raw BLE-packed samples from the React Native app without conversion.
+JSON-only FastAPI service for training and detecting timed gesture sequences from **abracadabra-rnapp** IMU recordings. This service is the ML/backend piece of the Abracadabra gesture-password flow:
 
-## Features
-
-- Train a **Random Forest** classifier on hand-crafted **time + frequency** IMU features (`scikit-learn` + `scipy.signal`).
-- Upload labeled CSV clips per movement type; **sliding-window** inference over longer recordings with smoothing and segment grouping.
-- **Auto-learning**: high-/medium-confidence segments from `/api/predict` can be saved under `app/data/pending_training/` for confirm/reject via API or the atomic movement web UI.
-- REST API with **Swagger** at `/docs` and **ReDoc** at `/redoc`.
-- Browser forms: **Atomic Movement** (recommended), **Standard Upload** (legacy UI—see caveat below), **Model Details** (HTML dashboard).
-
-## Important implementation notes
-
-- **Sample rate assumption:** Feature extraction and sliding-window slicing assume **`fs = 250` Hz** (filters, Welch PSD, `/api/predict` window parameters). If your hardware exports **~200 Hz**, either resample on export or update `window_size_ms`, `overlap_ms`, and `fs` in `app/api/router.py` / `app/models/rf_gesture_model.py` so they stay consistent.
-- **Active model:** **`RandomForestGestureModel`** in `app/models/rf_gesture_model.py`. **`app/models/gesture_model.py`** (DTW-based) is **legacy** and **not** wired into the API.
-- **Deployment:** Training data and `rf_gesture_model.joblib` live under `app/data/` by default. On ephemeral hosts (Railway, Render, etc.), **redeploys can wipe uploads** unless you attach persistent storage—see `Dockerfile`, `render.yaml`, and `RAILWAY_DEPLOYMENT.md`.
-
-## Project structure
-
+```text
+abracadabra-platformio  ->  abracadabra-rnapp  ->  abracadabra_gesture_processing
+records raw IMU             receives/crops          trains + detects timed gestures
 ```
+
+The previous prototype has been replaced. The public API accepts the same shape the React Native app already has after BLE decode: `window_id` plus `samples[]` with `t_ms`, `ax`, `ay`, `az`, `gx`, `gy`, `gz`.
+
+## What It Does
+
+- Stores labeled gesture crops as JSON under `app/data/training/<movement_type>/`.
+- Trains a Random Forest classifier on hand-crafted IMU features from raw axes and derived magnitudes.
+- Classifies one cropped gesture window.
+- Analyzes a full 3-4 second recording by sliding windows across the timeline and returning timed segments.
+- Optionally compares detected non-still segments to an expected gesture-password sequence.
+
+Supported movement labels:
+
+- `tap`
+- `double_tap`
+- `still` (alias: `silence`)
+- `wrist_rotation`
+
+## JSON Contract
+
+Training/classification payloads use this shape:
+
+```json
+{
+  "window_id": 17,
+  "recording_id": "optional-client-id",
+  "sample_rate_hz": 200,
+  "samples": [
+    {"t_ms": 0, "ax": 120, "ay": -40, "az": 1024, "gx": 8, "gy": -3, "gz": 1},
+    {"t_ms": 5, "ax": 122, "ay": -39, "az": 1021, "gx": 9, "gy": -4, "gz": 2}
+  ]
+}
+```
+
+For labeled training crops, add `movement_type`:
+
+```json
+{
+  "movement_type": "tap",
+  "window_id": 17,
+  "samples": [
+    {"t_ms": 1250, "ax": 120, "ay": -40, "az": 1024, "gx": 8, "gy": -3, "gz": 1}
+  ]
+}
+```
+
+`t_ms`, `window_id`, and `recording_id` are metadata/timing only; they are not ML features. The model learns from `ax`...`gz` and derived features. Cropped windows are normalized to crop-relative time internally so a tap at 500 ms and a tap at 3200 ms can train the same class.
+
+## API Endpoints
+
+All API routes are mounted under `/api`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/training-samples` | Save one labeled RN crop as JSON training data. |
+| `GET` | `/api/training-samples` | List stored labels, sample counts, and metadata. |
+| `DELETE` | `/api/training-samples/{movement_type}` | Delete all samples for one movement. |
+| `DELETE` | `/api/training-samples` | Delete all training samples. |
+| `POST` | `/api/train` | Train the Random Forest from stored JSON samples and save `rf_gesture_model.joblib`. |
+| `GET` | `/api/model-status` | Report trained/not trained, labels, and cross-validation summary. |
+| `GET` | `/api/model-details` | Return feature count, labels, top feature importances, and CV stats. |
+| `POST` | `/api/recordings/classify` | Classify one cropped gesture window. |
+| `POST` | `/api/recordings/analyze` | Analyze a full recording and return timed gesture segments. |
+| `POST` | `/api/gesture-passwords/verify` | Analyze a recording and compare non-still segment labels with an expected sequence. |
+
+Health/documentation:
+
+- `GET /`
+- `GET /health`
+- `GET /docs`
+- `GET /redoc`
+
+## Full Recording Analysis
+
+`POST /api/recordings/analyze` is for 3-4 second recordings that may contain multiple events:
+
+```text
+still -> tap -> still -> double_tap -> still -> wrist_rotation
+```
+
+The service sorts samples by `t_ms`, infers sample rate from median `t_ms` deltas unless provided, slides an overlapping window across the recording, classifies each window, smooths isolated one-window outliers, and merges adjacent windows into timed segments.
+
+Example response shape:
+
+```json
+{
+  "segments": [
+    {"movement_type": "tap", "start_ms": 420, "end_ms": 760, "confidence": 0.91},
+    {"movement_type": "double_tap", "start_ms": 1180, "end_ms": 1760, "confidence": 0.88},
+    {"movement_type": "wrist_rotation", "start_ms": 2460, "end_ms": 3120, "confidence": 0.93}
+  ],
+  "counts": {"tap": 1, "double_tap": 1, "wrist_rotation": 1}
+}
+```
+
+## Training Workflow
+
+1. Use `abracadabra-rnapp` to receive a recording from the wearable.
+2. Crop a gesture window in the RN timeline.
+3. Upload the crop to `POST /api/training-samples` with `movement_type`.
+4. Repeat for enough examples of `tap`, `double_tap`, `still`, and `wrist_rotation`.
+5. Call `POST /api/train`.
+6. Send full recordings to `POST /api/recordings/analyze`.
+7. Add more labeled crops and retrain when detection misses or confuses gestures.
+
+The volume is empty on first Railway mount; initial training data must be uploaded as JSON from the app or seeded manually as JSON files.
+
+## Project Structure
+
+```text
 .
 ├── app/
-│   ├── main.py              # FastAPI app, CORS, HTML pages, /health, /api/transform-data
-│   ├── api/
-│   │   └── router.py        # /api/train, /api/predict, training CRUD, pending learning
-│   ├── models/
-│   │   ├── rf_gesture_model.py   # Random Forest (used)
-│   │   └── gesture_model.py      # DTW (unused by router)
-│   ├── utils/
-│   │   └── data_handler.py   # CSV validation, training directory loader
+│   ├── main.py                    # FastAPI app, CORS, root, /health
+│   ├── api/router.py              # JSON-only API routes
+│   ├── schemas/recording.py       # RN-shaped Pydantic request models
+│   ├── utils/rn_recording.py      # JSON persistence + DataFrame conversion
+│   ├── models/rf_gesture_model.py # Random Forest feature pipeline
 │   └── data/
-│       ├── training/         # Labeled CSV samples (e.g. tap_001.csv)
-│       ├── pending_training/ # Auto-detected segments (runtime)
-│       └── rf_gesture_model.joblib  # Saved model (after train)
-├── pyproject.toml           # Python dependencies (source of truth for pip)
-├── Dockerfile               # Production image (pinned deps, entrypoint for volume perms)
-├── docker-entrypoint.sh     # chown /app/app/data then gosu → uvicorn
-├── docker-compose.yml
-├── render.yaml              # Render.com blueprint
-├── Makefile
-├── RAILWAY_DEPLOYMENT.md
-├── GITHUB_SETUP.md
-├── csv/                     # Optional reference CSVs
-└── README.md
+│       ├── training/              # JSON labeled crops on Railway volume
+│       ├── pending_training/      # Reserved for future review workflows
+│       └── rf_gesture_model.joblib
+├── Dockerfile
+├── docker-entrypoint.sh
+├── pyproject.toml
+├── railway.toml
+└── RAILWAY_DEPLOYMENT.md
 ```
 
-There is **no** `requirements.txt` at the repo root; use **`pyproject.toml`** (or install from the **Dockerfile** when containerizing).
-
-## Installation
-
-1. Clone the repository and enter the project directory (inner folder if your clone has a nested same-named directory):
-
-   ```bash
-   git clone <repository-url>
-   cd abracadabra_gesture_processing
-   ```
-
-2. Create and activate a virtual environment:
-
-   ```bash
-   python -m venv venv
-   source venv/bin/activate   # Windows: venv\Scripts\activate
-   ```
-
-3. Install dependencies (editable install reads `pyproject.toml`; `scipy` is pulled in via `scikit-learn` for spectral features):
-
-   ```bash
-   pip install -e .
-   ```
-
-   For development tooling only:
-
-   ```bash
-   pip install -e ".[dev]"
-   ```
-
-## Usage
-
-### Start the API server
+## Local Development
 
 ```bash
+python -m venv venv
+source venv/bin/activate
+pip install -e .
 uvicorn app.main:app --reload
 ```
 
-- API root: http://localhost:8000  
-- OpenAPI: http://localhost:8000/docs  
-- Health (for load balancers): http://localhost:8000/health  
+Open:
 
-### Web interfaces
+- http://localhost:8000/docs
+- http://localhost:8000/health
 
-| URL | Purpose |
-|-----|---------|
-| `/` | JSON index with endpoint hints |
-| `/atomic-movement-form` | Upload labeled atomic clips, test one window, analyze full recording, pending-review UI |
-| `/upload-form` | **Legacy** upload/predict UI; `/api/predict` returns **multi-segment** sliding-window JSON (`significant_movements`, `detailed_segments`, …), **not** the older single-field `predicted_gesture` shape. Prefer the atomic form + `/api/predict-window` for single-window tests. |
-| `/model-details` | HTML page; loads metrics from **`GET /api/model-details`** |
+## Railway
 
-### API endpoints
+Mount the Railway volume at:
 
-All router endpoints are mounted under **`/api`** (see `app/main.py`).
+```text
+/app/app/data
+```
 
-**Training & model**
+`docker-entrypoint.sh` starts as root briefly, creates/chowns the mounted data folders for `appuser`, then starts uvicorn as `appuser`.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/upload-training-data` | Body: form `csv_data`, optional `movement_type` (`tap`, `wrist_rotation`, `still`). Saves CSV under `app/data/training/`. |
-| POST | `/api/train` | Background train on all CSVs in `training/`; writes `app/data/rf_gesture_model.joblib`. |
-| GET | `/api/model-status` | Trained or not; labels; optional CV summary. |
-| GET | `/api/model-details` | JSON: feature count, movements, top feature importances, cross-validation. |
-| GET | `/api/training-data` | List movements and sample counts. |
-| DELETE | `/api/training-data/{movement_name}` | Remove CSVs for one movement prefix. |
-| DELETE | `/api/delete-all-training-data` | Remove all training CSVs. |
+Railway sets `PORT`; optional vars:
 
-**Prediction**
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/predict-window` | Form `csv_data`: classify **one** short window → `predicted_movement`, `confidence`, `all_probabilities`. |
-| POST | `/api/predict` | Form `csv_data`: **full recording** (typical use: multi-second clip, e.g. ~4 s device capture). Sliding windows (**350 ms**, **250 ms overlap**, **250 Hz** assumed), smoothing, segment merge, optional tap-split heuristics, `auto_learning` metadata. |
-
-**Auto-learning (pending segments)**
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/pending-training-data` | List pending JSON metadata + linked CSV slices. |
-| POST | `/api/confirm-detection/{detection_id}` | Form `correct_movement`: promote slice into `training/`. |
-| DELETE | `/api/reject-detection/{detection_id}` | Mark rejected; does not add to training. |
-| POST | `/api/auto-retrain` | Background retrain if enough confirmed pending items (see router logic). |
-
-**Other**
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/transform-data` | Form `csv_data`: map columns `rel_timestamp`/`acc_*`/`gyro_*` → `timeline`/`accX`/… CSV text in JSON (helper for alternate export formats). |
-
-### CSV data format
-
-Required columns for upload and prediction:
-
-- `rel_timestamp` — relative time (ms) within the clip  
-- `recording_id` — stable string id per recording (used when `movement_type` is omitted on upload)  
-- `acc_x`, `acc_y`, `acc_z`, `gyro_x`, `gyro_y`, `gyro_z` — floats in **consistent physical or raw units** across train and inference  
-
-Minimum row count and NaN rules are enforced in `app/utils/data_handler.py`.
-
-## Workflow for atomic movement detection
-
-1. **Collect training samples** (~350 ms tap, ~500 ms wrist rotation, ~300–500 ms still) as CSV with the columns above; use **`/atomic-movement-form`** to paste and label uploads.
-
-2. **Train:** After enough examples per class (e.g. 20–30 each):
-
-   ```bash
-   curl -X POST http://localhost:8000/api/train
-   ```
-
-   Training runs in the **background**; refresh **`/model-details`** or **`GET /api/model-status`** after a short wait.
-
-3. **Test:** Use **`POST /api/predict-window`** or the atomic form’s “Test Single Movement Window” section.
-
-4. **Segment long recordings:** **`POST /api/predict`** with a full CSV stream returns counts, **`detailed_segments`** (start/end/duration), **`still_phases`**, raw/smoothed window predictions, and **`auto_learning`** suggestions. Review pending items via **`GET /api/pending-training-data`** and confirm/reject as needed.
-
-## How it works
-
-1. Short labeled clips are concatenated per movement type and turned into **feature vectors** (stats + spectral bands on acc/gyro axes and magnitudes), with **bandpass filtering** assuming **250 Hz**.
-
-2. A **`RandomForestClassifier`** (`class_weight='balanced'`) is trained with **`StandardScaler`**; model + scaler are persisted with **`joblib`**.
-
-3. Long-stream detection applies **overlapping windows** (defaults in `router.py`), **median-style smoothing** of isolated labels, **run-length grouping**, significance thresholds (e.g. ≥ 2 windows), and optional **multi-tap heuristics** on long tap runs.
-
-## Docker / cloud
-
-- **Docker:** `docker build` using the root `Dockerfile`. The container starts as root briefly: **`docker-entrypoint.sh`** creates/chowns **`/app/app/data`** for volume mounts, then runs **uvicorn** as **`appuser`** via **`gosu`**. Railway/Render pass **`$PORT`** as usual.  
-- **Render:** `render.yaml` defines a web service and health check.  
-- **Railway:** See `RAILWAY_DEPLOYMENT.md` and `railway.toml` / `nixpacks.toml`.
-
-For production, restrict **`CORSMiddleware`** in `app/main.py` (currently `allow_origins=["*"]` for development).
-
-## License
-
-See `pyproject.toml` (MIT).
+- `API_TITLE`
+- `API_VERSION`
