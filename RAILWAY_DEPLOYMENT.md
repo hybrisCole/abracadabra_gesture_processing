@@ -11,6 +11,7 @@ This project is configured for deployment on Railway with proper configuration f
 - **`nixpacks.toml`** - Build system configuration
 - **`railway.env.example`** - Environment variables template
 - **`Dockerfile`** - Container configuration
+- **`docker-entrypoint.sh`** - Fixes ownership on **`/app/app/data`** volume mounts, then runs uvicorn as **`appuser`**
 
 ## 🔧 Configuration Details
 
@@ -19,6 +20,12 @@ This project is configured for deployment on Railway with proper configuration f
 - Sets health check endpoint (`/health`)
 - Configures restart policies
 - Sets environment variables
+
+### Persistent volume permissions
+
+If you mount a Railway volume at **`/app/app/data`**, the mount is typically **root-owned**. The app runs as **`appuser` (uid 1000)**, which caused **`PermissionError`** on `app/data/training` until fixed.
+
+The **`docker-entrypoint.sh`** starts as **root**, creates **`training`** / **`pending_training`**, runs **`chown -R appuser:appuser /app/app/data`**, then starts **uvicorn** with **`gosu appuser`** so the process stays non-root.
 
 ### Environment Variables
 Railway automatically provides:
