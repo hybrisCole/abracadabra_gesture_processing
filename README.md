@@ -15,7 +15,8 @@ The previous prototype has been replaced. The public API accepts the same shape 
 - Trains a Random Forest classifier on hand-crafted IMU features from raw axes and derived magnitudes.
 - Classifies one cropped gesture window.
 - Analyzes a full 3-4 second recording by sliding windows across the timeline and returning timed segments.
-- Optionally compares detected non-still segments to an expected gesture-password sequence.
+- Resolves overlapping raw segments into a non-overlapping timeline and password **`sequence`** (precedence: `wrist_rotation` > `double_tap` > `tap` > `still`).
+- Optionally compares that resolved **`sequence`** to an expected gesture-password via **`POST /api/gesture-passwords/verify`**.
 
 Supported movement labels:
 
@@ -69,7 +70,7 @@ All API routes are mounted under `/api`.
 | `GET` | `/api/model-details` | Return feature count, labels, top feature importances, and CV stats. |
 | `POST` | `/api/recordings/classify` | Classify one cropped gesture window. |
 | `POST` | `/api/recordings/analyze` | Analyze a full recording and return timed gesture segments. |
-| `POST` | `/api/gesture-passwords/verify` | Analyze a recording and compare non-still segment labels with an expected sequence. |
+| `POST` | `/api/gesture-passwords/verify` | Analyze a recording and compare resolved `sequence` with an expected password. |
 
 Health/documentation:
 
@@ -104,7 +105,9 @@ Example response shape:
 }
 ```
 
-`segments` are raw sliding-window detections (may overlap). `resolved_segments` and `sequence` apply precedence: `wrist_rotation` > `double_tap` > `tap` > `still`.
+`segments` are raw sliding-window detections (may overlap—for example `tap` windows inside a `double_tap`). `resolved_segments` and `sequence` apply precedence: **`wrist_rotation` > `double_tap` > `tap` > `still`**.
+
+Implementation: `app/utils/segment_resolve.py` — timeline sweep (highest precedence wins each sub-interval), merge adjacent same label, then merge an adjacent leading **`tap`** into **`double_tap`** when they share a boundary (first-hit artifact before `double_tap` windows start). Segments with **confidence below 50%** are ignored for resolve and password **`sequence`** (`min_confidence` default **0.5** on analyze). Tests: `tests/test_segment_resolve.py`.
 
 ## Training Workflow
 

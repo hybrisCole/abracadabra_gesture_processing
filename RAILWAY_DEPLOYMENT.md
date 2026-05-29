@@ -84,8 +84,8 @@ railway open
 - **`POST /api/train`** - Train Random Forest from JSON samples
 - **`GET /api/model-status`** - Model status and labels
 - **`POST /api/recordings/classify`** - Classify one cropped window
-- **`POST /api/recordings/analyze`** - Detect timed gesture segments in a full 3-4 second recording
-- **`POST /api/gesture-passwords/verify`** - Compare detected sequence to expected gesture-password labels
+- **`POST /api/recordings/analyze`** - Detect timed gesture segments; returns raw `segments` plus precedence-resolved `resolved_segments` and `sequence`
+- **`POST /api/gesture-passwords/verify`** - Compare resolved `sequence` to expected gesture-password labels
 
 ## Monitoring
 

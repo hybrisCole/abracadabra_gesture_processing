@@ -15,6 +15,23 @@ MOVEMENT_PRECEDENCE: Dict[str, int] = {
 
 NON_PASSWORD_MOVEMENTS = frozenset({"still", "silence"})
 
+# Gestures below this confidence are excluded from resolve + password sequence.
+MIN_GESTURE_CONFIDENCE = 0.5
+
+
+def segment_meets_confidence(
+    segment: Dict[str, Any],
+    min_confidence: float = MIN_GESTURE_CONFIDENCE,
+) -> bool:
+    return float(segment.get("confidence", 0.0)) >= min_confidence
+
+
+def filter_segments_by_confidence(
+    segments: Sequence[Dict[str, Any]],
+    min_confidence: float = MIN_GESTURE_CONFIDENCE,
+) -> List[Dict[str, Any]]:
+    return [segment for segment in segments if segment_meets_confidence(segment, min_confidence)]
+
 
 def _precedence_rank(movement_type: str) -> int:
     return MOVEMENT_PRECEDENCE.get(movement_type, 0)
@@ -42,12 +59,16 @@ def _pick_winner(active: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
 
 def resolve_segments_by_precedence(
     segments: Sequence[Dict[str, Any]],
+    *,
+    min_confidence: float = MIN_GESTURE_CONFIDENCE,
 ) -> List[Dict[str, Any]]:
     """Merge overlapping raw segments into a non-overlapping timeline.
 
     When multiple segments cover the same time range, the label with the highest
     precedence wins (wrist_rotation > double_tap > tap > still).
+    Segments below ``min_confidence`` are ignored.
     """
+    segments = filter_segments_by_confidence(segments, min_confidence)
     if not segments:
         return []
 
@@ -93,7 +114,8 @@ def resolve_segments_by_precedence(
         else:
             merged.append(dict(piece))
 
-    return _merge_leading_tap_into_double_tap(merged)
+    merged = _merge_leading_tap_into_double_tap(merged)
+    return filter_segments_by_confidence(merged, min_confidence)
 
 
 def _merge_leading_tap_into_double_tap(
@@ -139,10 +161,13 @@ def segments_to_password_sequence(
     segments: Sequence[Dict[str, Any]],
     *,
     include_still: bool = False,
+    min_confidence: float = MIN_GESTURE_CONFIDENCE,
 ) -> List[str]:
     """Gesture password order: one label per contiguous resolved segment, time order."""
     sequence: List[str] = []
     for segment in segments:
+        if not segment_meets_confidence(segment, min_confidence):
+            continue
         movement = str(segment["movement_type"])
         if not include_still and movement in NON_PASSWORD_MOVEMENTS:
             continue

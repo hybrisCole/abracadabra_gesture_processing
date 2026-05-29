@@ -20,6 +20,7 @@ from app.utils.rn_recording import (
     validate_imu_frame,
 )
 from app.utils.segment_resolve import (
+    MIN_GESTURE_CONFIDENCE,
     resolve_segments_by_precedence,
     segments_to_password_sequence,
 )
@@ -146,14 +147,19 @@ def _analyze_recording(payload: AnalyzeRecordingIn) -> Dict[str, Any]:
     if not window_results["success"]:
         raise HTTPException(status_code=400, detail=window_results.get("error", "Window prediction failed"))
 
+    min_confidence = max(payload.min_confidence, MIN_GESTURE_CONFIDENCE)
     segments = _segments_from_windows(
         window_results,
-        min_confidence=payload.min_confidence,
+        min_confidence=min_confidence,
         min_segment_windows=payload.min_segment_windows,
         include_still=payload.include_still,
     )
-    resolved_segments = resolve_segments_by_precedence(segments)
-    sequence = segments_to_password_sequence(resolved_segments)
+    resolved_segments = resolve_segments_by_precedence(
+        segments, min_confidence=min_confidence
+    )
+    sequence = segments_to_password_sequence(
+        resolved_segments, min_confidence=min_confidence
+    )
 
     counts: Dict[str, int] = {}
     for segment in segments:
@@ -188,7 +194,7 @@ def _analyze_recording(payload: AnalyzeRecordingIn) -> Dict[str, Any]:
             "window_size_ms": payload.window_size_ms,
             "overlap_ms": payload.overlap_ms,
             "sample_rate_hz": metadata["sample_rate_hz"],
-            "min_confidence": payload.min_confidence,
+            "min_confidence": min_confidence,
             "min_segment_windows": payload.min_segment_windows,
             "include_still": payload.include_still,
         },

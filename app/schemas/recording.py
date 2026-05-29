@@ -44,7 +44,7 @@ class AnalyzeRecordingIn(RecordingWindowIn):
 
     window_size_ms: int = Field(default=450, ge=100, le=1500)
     overlap_ms: int = Field(default=300, ge=0, le=1400)
-    min_confidence: float = Field(default=0.35, ge=0.0, le=1.0)
+    min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     min_segment_windows: int = Field(default=1, ge=1, le=20)
     include_still: bool = True
 

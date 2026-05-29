@@ -1,6 +1,7 @@
 """Tests for overlapping segment precedence resolution."""
 
 from app.utils.segment_resolve import (
+    filter_segments_by_confidence,
     resolve_segments_by_precedence,
     segments_to_password_sequence,
 )
@@ -79,3 +80,13 @@ def test_leading_tap_merged_into_adjacent_double_tap():
     assert resolved[0]["movement_type"] == "double_tap"
     assert resolved[0]["start_ms"] == 600
     assert resolved[0]["end_ms"] == 1200
+
+
+def test_segments_below_fifty_percent_confidence_are_ignored():
+    segments = [
+        {"movement_type": "tap", "start_ms": 0, "end_ms": 500, "confidence": 0.49},
+        {"movement_type": "double_tap", "start_ms": 500, "end_ms": 1000, "confidence": 0.8},
+    ]
+    assert filter_segments_by_confidence(segments) == [segments[1]]
+    resolved = resolve_segments_by_precedence(segments)
+    assert segments_to_password_sequence(resolved) == ["double_tap"]
