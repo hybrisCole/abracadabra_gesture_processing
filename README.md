@@ -92,14 +92,19 @@ Example response shape:
 
 ```json
 {
-  "segments": [
-    {"movement_type": "tap", "start_ms": 420, "end_ms": 760, "confidence": 0.91},
-    {"movement_type": "double_tap", "start_ms": 1180, "end_ms": 1760, "confidence": 0.88},
-    {"movement_type": "wrist_rotation", "start_ms": 2460, "end_ms": 3120, "confidence": 0.93}
+  "segments": [],
+  "resolved_segments": [
+    {"movement_type": "double_tap", "start_ms": 600, "end_ms": 1345, "confidence": 0.76},
+    {"movement_type": "wrist_rotation", "start_ms": 1345, "end_ms": 2395, "confidence": 0.79},
+    {"movement_type": "tap", "start_ms": 2395, "end_ms": 3145, "confidence": 0.70}
   ],
-  "counts": {"tap": 1, "double_tap": 1, "wrist_rotation": 1}
+  "sequence": ["double_tap", "wrist_rotation", "tap"],
+  "counts": {},
+  "resolved_counts": {"double_tap": 1, "wrist_rotation": 1, "tap": 1}
 }
 ```
+
+`segments` are raw sliding-window detections (may overlap). `resolved_segments` and `sequence` apply precedence: `wrist_rotation` > `double_tap` > `tap` > `still`.
 
 ## Training Workflow
 

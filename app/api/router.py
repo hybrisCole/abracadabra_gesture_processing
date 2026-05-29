@@ -19,6 +19,10 @@ from app.utils.rn_recording import (
     save_training_sample,
     validate_imu_frame,
 )
+from app.utils.segment_resolve import (
+    resolve_segments_by_precedence,
+    segments_to_password_sequence,
+)
 
 router = APIRouter()
 model = RandomForestGestureModel()
@@ -148,10 +152,18 @@ def _analyze_recording(payload: AnalyzeRecordingIn) -> Dict[str, Any]:
         min_segment_windows=payload.min_segment_windows,
         include_still=payload.include_still,
     )
+    resolved_segments = resolve_segments_by_precedence(segments)
+    sequence = segments_to_password_sequence(resolved_segments)
+
     counts: Dict[str, int] = {}
     for segment in segments:
         movement = segment["movement_type"]
         counts[movement] = counts.get(movement, 0) + 1
+
+    resolved_counts: Dict[str, int] = {}
+    for segment in resolved_segments:
+        movement = segment["movement_type"]
+        resolved_counts[movement] = resolved_counts.get(movement, 0) + 1
 
     return {
         "recording_id": metadata["recording_id"],
@@ -160,7 +172,10 @@ def _analyze_recording(payload: AnalyzeRecordingIn) -> Dict[str, Any]:
         "sample_rate_hz": metadata["sample_rate_hz"],
         "duration_ms": metadata["duration_ms"],
         "counts": counts,
+        "resolved_counts": resolved_counts,
         "segments": segments,
+        "resolved_segments": resolved_segments,
+        "sequence": sequence,
         "raw_window_predictions": {
             "predictions": window_results["window_predictions"],
             "smoothed_predictions": _smooth_predictions(window_results["window_predictions"]),
@@ -209,12 +224,11 @@ async def analyze_recording(payload: AnalyzeRecordingIn):
 
 @router.post("/gesture-passwords/verify")
 async def verify_gesture_password(payload: VerifyGesturePasswordIn):
-    """Compare non-still detected segments with an expected gesture sequence."""
+    """Compare precedence-resolved gesture sequence with an expected password."""
     analysis = _analyze_recording(payload)
-    detected = [s for s in analysis["segments"] if s["movement_type"] != "still"]
     expected = [e.model_dump() for e in payload.expected_sequence]
     expected_movements = [normalize_movement_type(e["movement_type"]) for e in expected]
-    detected_movements = [s["movement_type"] for s in detected]
+    detected_movements = analysis["sequence"]
     matched = detected_movements == expected_movements
 
     return {
